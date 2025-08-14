@@ -1,0 +1,77 @@
+name: Persistent Pterodactyl VPS with Auto Backup + SSHx
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run mode: backup / new-vps / both'
+        required: false
+        default: 'both'
+  schedule:
+    - cron: "*/3 * * * *"    # Har 3 min me backup
+    - cron: "0 */6 * * *"    # Har 6 ghante new VPS
+
+jobs:
+
+  backup:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode != 'new-vps' || github.event_name == 'schedule' && github.event.schedule == '*/3 * * * *'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Create backups folder
+        run: mkdir -p backups
+
+      - name: Take backup from VPS
+        run: |
+          TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+          sshpass -p 'root' ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "tar -czf /tmp/ptero_backup_$TIMESTAMP.tar.gz /var/www/pterodactyl /etc/cloudflared"
+          scp -P 2222 root@127.0.0.1:/tmp/ptero_backup_$TIMESTAMP.tar.gz backups/
+
+      - name: Delete old backups
+        run: |
+          ls -t backups | tail -n +2 | xargs -I {} rm backups/{}
+
+  new-vps:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode != 'backup' || github.event_name == 'schedule' && github.event.schedule == '0 */6 * * *'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install VPS packages
+        run: sudo apt update && sudo apt install -y qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils virt-manager cloud-utils wget sshpass curl
+
+      - name: Download Ubuntu cloud image
+        run: wget https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img -O vps.img
+
+      - name: Start VPS
+        run: |
+          qemu-system-x86_64 -m 2048 -smp 2 -hda vps.img -net nic -net user,hostfwd=tcp::2222-:22 &
+          sleep 120
+
+      - name: Setup root password
+        run: |
+          ssh-keygen -R [127.0.0.1]:2222
+          sshpass -p 'ubuntu' ssh -o StrictHostKeyChecking=no -p 2222 ubuntu@127.0.0.1 \
+            "echo 'root:root' | sudo chpasswd && sudo sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config && sudo systemctl restart ssh"
+
+      - name: Restore from latest backup
+        run: |
+          LATEST=$(ls -t backups | head -n 1)
+          if [ -n "$LATEST" ]; then
+            scp -P 2222 backups/$LATEST root@127.0.0.1:/tmp/
+            sshpass -p 'root' ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+              "tar -xzf /tmp/$LATEST -C /"
+          else
+            echo "No backup found, skipping restore."
+          fi
+
+      - name: Install SSHx in VPS
+        run: |
+          sshpass -p 'root' ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "curl -sSf https://sshx.io/get | sh"
+
+      - name: Start SSHx and show link
+        run: |
+          sshpass -p 'root' ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 \
+            "sshx --print"
