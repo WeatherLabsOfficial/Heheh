@@ -1,40 +1,38 @@
-name: VPS Auto SSHx + Backup
+name: VPS Auto SSH
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 jobs:
-  run-vps:
+  create-vps:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
-
       - name: Install dependencies
         run: |
           sudo apt update -y
-          sudo apt install -y curl tar gzip
+          sudo apt install -y openssh-server qemu-system-x86 cloud-utils
 
-      - name: Install SSHx
+      - name: Create disk image
         run: |
-          curl -s https://sshx.io/install.sh | bash
+          qemu-img create -f qcow2 vps.img 10G
+          cloud-localds cloud.img user-data
 
-      - name: Start SSHx Tunnel
+      - name: Start VPS
         run: |
-          nohup sshx > sshx_link.txt 2>&1 &
-          sleep 5
-          cat sshx_link.txt | grep -m1 "https://" || echo "SSHx link not found"
+          nohup qemu-system-x86_64 \
+            -m 2048 \
+            -smp 2 \
+            -hda vps.img \
+            -net nic -net user,hostfwd=tcp::2222-:22 \
+            -nographic &
+          sleep 20
 
-      - name: Run Backup Loop
+      - name: Setup SSH key
         run: |
-          mkdir -p ~/vps_backups
-          while true; do
-            BACKUP_FILE=~/vps_backups/backup_$(date '+%Y-%m-%d_%H-%M-%S').tar.gz
-            tar -czf "$BACKUP_FILE" ~
-            echo "[BACKUP] Saved: $BACKUP_FILE"
-            sleep 180
-          done
+          mkdir -p ~/.ssh
+          ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa -N ""
+          cat ~/.ssh/id_rsa.pub
+
+      - name: Connect to VPS
+        run: |
+          ssh -o StrictHostKeyChecking=no -p 2222 user@127.0.0.1 "echo 'SSH Connected to VPS'"
