@@ -1,0 +1,40 @@
+name: VPS Auto SSHx + Backup
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  run-vps:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Install dependencies
+        run: |
+          sudo apt update -y
+          sudo apt install -y curl tar gzip
+
+      - name: Install SSHx
+        run: |
+          curl -s https://sshx.io/install.sh | bash
+
+      - name: Start SSHx Tunnel
+        run: |
+          nohup sshx > sshx_link.txt 2>&1 &
+          sleep 5
+          cat sshx_link.txt | grep -m1 "https://" || echo "SSHx link not found"
+
+      - name: Run Backup Loop
+        run: |
+          mkdir -p ~/vps_backups
+          while true; do
+            BACKUP_FILE=~/vps_backups/backup_$(date '+%Y-%m-%d_%H-%M-%S').tar.gz
+            tar -czf "$BACKUP_FILE" ~
+            echo "[BACKUP] Saved: $BACKUP_FILE"
+            sleep 180
+          done
